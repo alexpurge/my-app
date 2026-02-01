@@ -34,6 +34,7 @@ const STYLES = `
     --text-secondary: #94a3b8;
     --accent-primary: #ff5d00;
     --accent-hover: #ff7b00;
+    --logo-bg: #ff8c42;
     --glass-border: 1px solid rgba(255, 255, 255, 0.1);
   }
 
@@ -1096,7 +1097,7 @@ export default function App() {
 
         <div style={{ width: '100%', maxWidth: '480px', padding: '2rem' }}>
           <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-            <div style={{ width: '64px', height: '64px', background: '#33333333', borderRadius: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 15px -3px rgba(255, 93, 0, 0.4)' }}>
+            <div style={{ width: '64px', height: '64px', background: 'var(--logo-bg)', borderRadius: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 15px -3px rgba(255, 93, 0, 0.4)' }}>
               <img src={LOGO_URL} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '16px' }} />
             </div>
             <h1 style={{ fontSize: '2.5rem' }}>Purge Digital</h1>
@@ -1155,7 +1156,7 @@ export default function App() {
       {/* NAV */}
       <nav className="nav-bar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <div style={{ width: '40px', height: '40px', background: '#ff5d00', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden' }} onClick={() => setSelectedAccount(null)}>
+          <div style={{ width: '40px', height: '40px', background: 'var(--logo-bg)', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', overflow: 'hidden' }} onClick={() => setSelectedAccount(null)}>
             <img src={LOGO_URL} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
           </div>
           <div>
