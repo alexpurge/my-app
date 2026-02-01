@@ -937,6 +937,45 @@ export default function App() {
   };
 
   // --- DATA SYNC LOGIC (SINGLE ACCOUNT) ---
+  const loadTeamRoster = useCallback(async () => {
+    if (!selectedAccount) return;
+
+    setTeam([]);
+
+    try {
+      const actorDiscoveryParams = { fields: 'actor_name,actor_id', limit: 500 };
+      const results = await Promise.allSettled([
+        callGraphAPI(`/${selectedAccount.id}/users`, { fields: 'id,name,role,tasks,permissions,email', limit: 100 }),
+        fetchChangeHistory(selectedAccount.id, actorDiscoveryParams)
+      ]);
+
+      const assignedUsers = results[0].status === 'fulfilled' ? results[0].value.data || [] : [];
+      const historicalActivities = results[1].status === 'fulfilled' ? results[1].value || [] : [];
+
+      const uniqueLogActors = new Map();
+      const addActor = (id, name) => {
+        if (id && name && !assignedUsers.find(u => u.id === id)) {
+          if (!uniqueLogActors.has(id)) {
+            uniqueLogActors.set(id, {
+              id: id,
+              name: name,
+              role: 'Logged Actor',
+              email: 'System/External',
+              permissions: []
+            });
+          }
+        }
+      };
+
+      historicalActivities.forEach(log => addActor(log.actor_id, log.actor_name));
+
+      const mergedTeam = [...assignedUsers, ...Array.from(uniqueLogActors.values())];
+      setTeam(mergedTeam);
+    } catch (err) {
+      console.error("Team Roster Error", err);
+    }
+  }, [selectedAccount, callGraphAPI, fetchChangeHistory]);
+
   const refreshAccountData = useCallback(async () => {
     if (!selectedAccount) return;
     
@@ -947,7 +986,6 @@ export default function App() {
     setSelectedAccountHealth(null); 
     setMainActorId(null);
     setUserActivityCounts({});
-    setTeam([]); // Clear to rebuild
     setLogs([]); // Clear logs
     setHistoryLoading(true);
 
@@ -985,15 +1023,10 @@ export default function App() {
       if (activitiesSince) logsParams.since = activitiesSince;
       if (activitiesUntil) logsParams.until = activitiesUntil;
 
-      // 2. DISCOVERY LOGS (FOR PERSISTENT TEAM)
-      const actorDiscoveryParams = { fields: 'actor_name,actor_id', limit: 500 };
-
       const results = await Promise.allSettled([
         callGraphAPI(`/${selectedAccount.id}/insights`, insightsParams), // 0
         fetchChangeHistory(selectedAccount.id, logsParams), // 1: Filtered Logs (for table & counts)
-        callGraphAPI(`/${selectedAccount.id}/users`, { fields: 'id,name,role,tasks,permissions,email', limit: 100 }), // 2: Users
-        callGraphAPI(`/${selectedAccount.id}/activities`, { fields: 'event_time,event_type', limit: 50 }), // 3: Health
-        fetchChangeHistory(selectedAccount.id, actorDiscoveryParams) // 4: Discovery (Historic)
+        callGraphAPI(`/${selectedAccount.id}/activities`, { fields: 'event_time,event_type', limit: 50 }) // 2: Health
       ]);
 
       // 0. INSIGHTS
@@ -1018,52 +1051,20 @@ export default function App() {
         setLogs([]);
       }
 
-      // 2. TEAM & HISTORICAL ACTORS
-      if (results[2].status === 'fulfilled') {
-        const assignedUsers = results[2].value.data || [];
-        let mergedTeam = [...assignedUsers];
-        
-        // Get Historical Actors from Result 4
-        const historicalActivities = results[4].status === 'fulfilled' ? results[4].value || [] : [];
-        const uniqueLogActors = new Map();
-
-        const addActor = (id, name) => {
-           if (id && name && !assignedUsers.find(u => u.id === id)) {
-              if (!uniqueLogActors.has(id)) {
-                uniqueLogActors.set(id, {
-                  id: id,
-                  name: name,
-                  role: 'Logged Actor',
-                  email: 'System/External',
-                  permissions: []
-                });
-              }
-            }
-        };
-
-        // Add actors from both Historical (Discovery) and Current (Filtered) to ensure we miss no one
-        historicalActivities.forEach(log => addActor(log.actor_id, log.actor_name));
-        filteredActivities.forEach(log => addActor(log.actor_id, log.actor_name));
-
-        mergedTeam = [...mergedTeam, ...Array.from(uniqueLogActors.values())];
-        
-        // Find Top User using LOCAL variable 'currentCounts' (not potentially stale state)
-        let maxCount = 0;
-        let topUserId = null;
-        Object.entries(currentCounts).forEach(([id, count]) => {
-           if (count > maxCount) {
-             maxCount = count;
-             topUserId = id;
-           }
-        });
-        
-        setTeam(mergedTeam);
-        setMainActorId(topUserId);
-      }
+      // 2. ACTIVITY LEADER
+      let maxCount = 0;
+      let topUserId = null;
+      Object.entries(currentCounts).forEach(([id, count]) => {
+        if (count > maxCount) {
+          maxCount = count;
+          topUserId = id;
+        }
+      });
+      setMainActorId(topUserId);
 
       // 3. HEALTH CHECK
-      if (results[3].status === 'fulfilled') {
-        const healthActivities = results[3].value.data || [];
+      if (results[2].status === 'fulfilled') {
+        const healthActivities = results[2].value.data || [];
         const lastHealthChange = healthActivities.find(log => isSubstantiveChange(log));
         if (lastHealthChange && new Date(lastHealthChange.event_time) > healthCutoff) {
           setSelectedAccountHealth({ healthy: true, lastDate: new Date(lastHealthChange.event_time).toLocaleDateString() });
@@ -1085,6 +1086,11 @@ export default function App() {
   useEffect(() => {
     if (selectedAccount) refreshAccountData();
   }, [selectedAccount, dateRange, customDates, refreshAccountData]);
+
+  // Load full team roster only when account changes (independent of date range)
+  useEffect(() => {
+    if (selectedAccount) loadTeamRoster();
+  }, [selectedAccount, loadTeamRoster]);
 
   const filteredAccounts = useMemo(() => {
     let result = accounts;
