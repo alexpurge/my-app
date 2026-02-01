@@ -86,6 +86,10 @@ const STYLES = `
     animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
   }
 
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out forwards;
+  }
+
   /* --- LOADING OVERLAY --- */
   .loading-overlay {
     position: fixed;
@@ -126,6 +130,23 @@ const STYLES = `
     height: 100%;
     background: var(--accent-primary);
     transition: width 0.3s ease;
+  }
+
+  /* --- SCAN NOTIFICATION --- */
+  .scan-toast {
+    position: fixed;
+    top: 1.5rem;
+    right: 1.5rem;
+    z-index: 9998;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid var(--border-color);
+    border-radius: 0.75rem;
+    padding: 0.75rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.45);
+    max-width: 320px;
   }
 
   /* --- UTILITIES --- */
@@ -787,6 +808,7 @@ export default function App() {
   const [globalLoading, setGlobalLoading] = useState({ active: false, status: '', progress: 0, canSkip: false });
   const [backgroundScan, setBackgroundScan] = useState({ active: false, progress: 0, status: '' });
   const [authError, setAuthError] = useState(null);
+  const [scanNotification, setScanNotification] = useState(null);
   
   const [accounts, setAccounts] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState(null);
@@ -881,11 +903,15 @@ export default function App() {
     }
   }, [fetchChangeHistory]);
 
+  useEffect(() => {
+    if (!scanNotification) return;
+    const timeout = setTimeout(() => setScanNotification(null), 6000);
+    return () => clearTimeout(timeout);
+  }, [scanNotification]);
+
   // --- PORTFOLIO RISK SCAN LOGIC (ONE-TIME, BACKGROUND CAPABLE) ---
   const performRiskScan = async (accountList) => {
-    // Initial blocking state
-    setGlobalLoading({ active: true, status: 'Initializing Risk Scan...', progress: 0, canSkip: true });
-    // Also set background state immediately so it's ready if skipped
+    // Non-blocking scan state (no global overlay)
     setBackgroundScan({ active: true, progress: 0, status: 'Initializing...' });
 
     const results = [];
@@ -901,9 +927,7 @@ export default function App() {
       const progress = Math.round(((i + 1) / accountList.length) * 100);
       const statusText = `Scanning ${acc.name}...`;
 
-      // Update both loaders
-      setGlobalLoading(prev => ({ ...prev, status: statusText, progress }));
-      setBackgroundScan({ active: true, progress, status: 'Scanning Portfolio...' });
+      setBackgroundScan({ active: true, progress, status: statusText });
 
       try {
         const [activitiesRes, insightsRes] = await Promise.allSettled([
@@ -957,15 +981,18 @@ export default function App() {
     }
 
     setScanResults(results);
-    // Clear both loaders on completion
-    setGlobalLoading({ active: false, status: '', progress: 0, canSkip: false });
     setBackgroundScan({ active: false, progress: 0, status: '' });
+    const riskCount = results.length;
+    setScanNotification({
+      message: riskCount
+        ? `Portfolio scan complete. ${riskCount} account${riskCount === 1 ? '' : 's'} flagged.`
+        : 'Portfolio scan complete. No risks detected.',
+    });
   };
 
   // --- LOGIN LOGIC ---
   const handleConnect = async (e) => {
     e.preventDefault();
-    setGlobalLoading({ active: true, status: 'Authenticating...', progress: 0, canSkip: false });
     setAuthError(null);
 
     try {
@@ -989,7 +1016,6 @@ export default function App() {
 
     } catch (err) {
       setAuthError(err.message || "Connection failed. Please check your Token.");
-      setGlobalLoading({ active: false, status: '', progress: 0, canSkip: false });
     }
   };
 
@@ -1174,15 +1200,6 @@ export default function App() {
       <div className="app-wrapper" style={{ justifyContent: 'center', alignItems: 'center' }}>
         <style>{STYLES}</style>
         
-        {globalLoading.active && (
-          <GlobalLoader 
-            status={globalLoading.status} 
-            progress={globalLoading.progress} 
-            onSkip={handleSkipLoading}
-            canSkip={globalLoading.canSkip}
-          />
-        )}
-
         <div style={{ width: '100%', maxWidth: '480px', padding: '2rem' }}>
           <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
             <div style={{ width: '64px', height: '64px', background: 'var(--logo-bg)', borderRadius: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 15px -3px rgba(255, 93, 0, 0.4)' }}>
@@ -1222,6 +1239,18 @@ export default function App() {
   return (
     <div className="app-wrapper">
       <style>{STYLES}</style>
+
+      {scanNotification && (
+        <div className="scan-toast animate-fade-in">
+          <CheckCircle2 size={18} color="#22c55e" />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>Scan Complete</div>
+            <div className="text-small" style={{ fontSize: '0.65rem', color: '#cbd5f5' }}>
+              {scanNotification.message}
+            </div>
+          </div>
+        </div>
+      )}
       
       {globalLoading.active && (
         <GlobalLoader 
