@@ -776,6 +776,7 @@ export default function App() {
   const [team, setTeam] = useState([]);
   const [mainActorId, setMainActorId] = useState(null);
   const [userActivityCounts, setUserActivityCounts] = useState({});
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // Scanning & Filter State
   const [scanResults, setScanResults] = useState([]); 
@@ -797,8 +798,8 @@ export default function App() {
     }
   }, [session.token]);
 
-  const fetchAllActivities = useCallback(async (accountId, params = {}) => {
-    const allActivities = [];
+  const fetchChangeHistory = useCallback(async (accountId, params = {}) => {
+    const activityLog = [];
     let afterCursor = null;
     let hasNextPage = true;
 
@@ -808,13 +809,13 @@ export default function App() {
 
       const page = await callGraphAPI(`/${accountId}/activities`, pageParams);
       const pageData = page?.data || [];
-      allActivities.push(...pageData);
+      activityLog.push(...pageData);
 
       afterCursor = page?.paging?.cursors?.after || null;
       hasNextPage = Boolean(afterCursor) && pageData.length > 0;
     }
 
-    return allActivities;
+    return activityLog;
   }, [callGraphAPI]);
 
   // --- PORTFOLIO RISK SCAN LOGIC (ONE-TIME, BACKGROUND CAPABLE) ---
@@ -948,6 +949,7 @@ export default function App() {
     setUserActivityCounts({});
     setTeam([]); // Clear to rebuild
     setLogs([]); // Clear logs
+    setHistoryLoading(true);
 
     const insightsParams = getRangeParams(dateRange, customDates);
     insightsParams.fields = 'spend,impressions,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,actions,action_values,cost_per_action_type,purchase_roas';
@@ -988,10 +990,10 @@ export default function App() {
 
       const results = await Promise.allSettled([
         callGraphAPI(`/${selectedAccount.id}/insights`, insightsParams), // 0
-        fetchAllActivities(selectedAccount.id, logsParams), // 1: Filtered Logs (for table & counts)
+        fetchChangeHistory(selectedAccount.id, logsParams), // 1: Filtered Logs (for table & counts)
         callGraphAPI(`/${selectedAccount.id}/users`, { fields: 'id,name,role,tasks,permissions,email', limit: 100 }), // 2: Users
         callGraphAPI(`/${selectedAccount.id}/activities`, { fields: 'event_time,event_type', limit: 50 }), // 3: Health
-        fetchAllActivities(selectedAccount.id, actorDiscoveryParams) // 4: Discovery (Historic)
+        fetchChangeHistory(selectedAccount.id, actorDiscoveryParams) // 4: Discovery (Historic)
       ]);
 
       // 0. INSIGHTS
@@ -1074,9 +1076,10 @@ export default function App() {
       console.error("Critical Sync Error", err);
     } finally {
       // STOP LOADER
+      setHistoryLoading(false);
       setGlobalLoading({ active: false, status: '', progress: 0, canSkip: false });
     }
-  }, [selectedAccount, dateRange, customDates, callGraphAPI, fetchAllActivities]);
+  }, [selectedAccount, dateRange, customDates, callGraphAPI, fetchChangeHistory]);
 
   // Only trigger data refresh when Account OR Date changes (not during login)
   useEffect(() => {
@@ -1374,7 +1377,7 @@ export default function App() {
             )}
 
             <div className="tab-group">
-              {['overview', 'logs', 'team'].map(tab => (
+              {['overview', 'team', 'logs'].map(tab => (
                 <button key={tab} className={`tab-btn ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
                   {tab === 'overview' && <TrendingUp size={16} />}
                   {tab === 'logs' && <History size={16} />}
@@ -1518,7 +1521,7 @@ export default function App() {
               <div className="glass-panel" style={{ overflow: 'hidden', display: 'flex', flexDirection: 'column', flex: 1, minHeight: '60vh' }}>
                 <div style={{ padding: '1.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between' }}>
                   <h3>Change History Log</h3>
-                  {dataLoading && <RefreshCw className="animate-spin" size={16} />}
+                  {historyLoading && <RefreshCw className="animate-spin" size={16} />}
                 </div>
                 <div className="data-table-wrapper" style={{flex: 1}}>
                   <table className="data-table">
