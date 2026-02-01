@@ -23,81 +23,16 @@ const LOGO_URL = 'https://i.imgur.com/QjjDjuU.png';
 const GRAPH_API_VERSION = 'v19.0';
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
-const CLIENT_TEAM_DIRECTORY = {
-  '101010101010101': [
-    {
-      id: 'user-ava-cole',
-      name: 'Ava Coleman',
-      email: 'ava.coleman@purgedigital.com',
-      role: 'Account Lead',
-      accessLabels: ['Logged Actor', 'System External']
-    },
-    {
-      id: 'user-marcus-lane',
-      name: 'Marcus Lane',
-      email: 'marcus.lane@purgedigital.com',
-      role: 'Performance Strategist',
-      accessLabels: ['Logged Actor', 'System External']
-    },
-    {
-      id: 'user-ivy-holt',
-      name: 'Ivy Holt',
-      email: 'ivy.holt@purgedigital.com',
-      role: 'Creative Ops',
-      accessLabels: ['Logged Actor', 'System External']
-    }
-  ],
-  '202020202020202': [
-    {
-      id: 'user-jonas-hill',
-      name: 'Jonas Hill',
-      email: 'jonas.hill@purgedigital.com',
-      role: 'Account Director',
-      accessLabels: ['Logged Actor', 'System External']
-    },
-    {
-      id: 'user-nia-king',
-      name: 'Nia King',
-      email: 'nia.king@purgedigital.com',
-      role: 'Lifecycle Manager',
-      accessLabels: ['Logged Actor', 'System External']
-    },
-    {
-      id: 'user-diego-watts',
-      name: 'Diego Watts',
-      email: 'diego.watts@purgedigital.com',
-      role: 'Automation Lead',
-      accessLabels: ['Logged Actor', 'System External']
-    }
-  ],
-  '303030303030303': [
-    {
-      id: 'user-luna-parker',
-      name: 'Luna Parker',
-      email: 'luna.parker@purgedigital.com',
-      role: 'Client Success',
-      accessLabels: ['Logged Actor', 'System External']
-    },
-    {
-      id: 'user-romeo-cross',
-      name: 'Romeo Cross',
-      email: 'romeo.cross@purgedigital.com',
-      role: 'Paid Social Lead',
-      accessLabels: ['Logged Actor', 'System External']
-    },
-    {
-      id: 'user-keira-snow',
-      name: 'Keira Snow',
-      email: 'keira.snow@purgedigital.com',
-      role: 'Insights Analyst',
-      accessLabels: ['Logged Actor', 'System External']
-    }
-  ]
-};
-
-const getClientTeamRoster = (accountId) => {
-  if (!accountId) return [];
-  return CLIENT_TEAM_DIRECTORY[accountId] ? [...CLIENT_TEAM_DIRECTORY[accountId]] : [];
+const normalizeTeamMember = (member, index) => {
+  const roleLabel = member?.role ? [member.role] : ['Authorized User'];
+  return {
+    id: member?.id || `member-${index}`,
+    name: member?.name || 'Unknown User',
+    email: member?.email || 'Email not available',
+    role: member?.role || 'Assigned User',
+    accessLabels: roleLabel,
+    activityKey: member?.name || member?.email || ''
+  };
 };
 
 // --- 1. EMBEDDED STYLESHEET ---
@@ -869,6 +804,8 @@ export default function App() {
   const [mainActorId, setMainActorId] = useState(null);
   const [userActivityCounts, setUserActivityCounts] = useState({});
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [teamByAccount, setTeamByAccount] = useState({});
+  const [teamLoading, setTeamLoading] = useState(false);
 
   // Scanning & Filter State
   const [scanResults, setScanResults] = useState([]); 
@@ -908,6 +845,27 @@ export default function App() {
     }
 
     return activityLog;
+  }, [callGraphAPI]);
+
+  const fetchAccountTeam = useCallback(async (accountId) => {
+    if (!accountId) return [];
+    setTeamLoading(true);
+
+    try {
+      const response = await callGraphAPI(`/${accountId}/users`, {
+        fields: 'id,name,email,role',
+        limit: 200
+      });
+      const members = (response?.data || []).map((member, index) => normalizeTeamMember(member, index));
+      setTeamByAccount(prev => ({ ...prev, [accountId]: members }));
+      return members;
+    } catch (err) {
+      console.error('Failed to load team roster', err);
+      setTeamByAccount(prev => ({ ...prev, [accountId]: prev[accountId] || [] }));
+      return [];
+    } finally {
+      setTeamLoading(false);
+    }
   }, [callGraphAPI]);
 
   // --- PORTFOLIO RISK SCAN LOGIC (ONE-TIME, BACKGROUND CAPABLE) ---
@@ -1116,7 +1074,7 @@ export default function App() {
           topUserKey = key;
         }
       });
-      const roster = getClientTeamRoster(selectedAccount.account_id);
+      const roster = teamByAccount[selectedAccount.id] || [];
       const topMember = roster.find(member => normalizeActorKey(member.activityKey || member.name) === topUserKey);
       const fallbackMemberId = roster[0]?.id || null;
       setMainActorId(topMember?.id || fallbackMemberId);
@@ -1139,12 +1097,37 @@ export default function App() {
       setHistoryLoading(false);
       setGlobalLoading({ active: false, status: '', progress: 0, canSkip: false });
     }
-  }, [selectedAccount, dateRange, customDates, callGraphAPI, fetchChangeHistory]);
+  }, [selectedAccount, dateRange, customDates, callGraphAPI, fetchChangeHistory, teamByAccount]);
 
   // Only trigger data refresh when Account OR Date changes (not during login)
   useEffect(() => {
     if (selectedAccount) refreshAccountData();
   }, [selectedAccount, dateRange, customDates, refreshAccountData]);
+
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const accountId = selectedAccount.id;
+    if (!teamByAccount[accountId]) {
+      fetchAccountTeam(accountId);
+    }
+  }, [selectedAccount, teamByAccount, fetchAccountTeam]);
+
+  useEffect(() => {
+    if (!selectedAccount) return;
+    const roster = teamByAccount[selectedAccount.id] || [];
+    if (roster.length === 0) return;
+    let maxCount = 0;
+    let topUserKey = null;
+    Object.entries(userActivityCounts).forEach(([key, count]) => {
+      if (count > maxCount) {
+        maxCount = count;
+        topUserKey = key;
+      }
+    });
+    const topMember = roster.find(member => normalizeActorKey(member.activityKey || member.name) === topUserKey);
+    const fallbackMemberId = roster[0]?.id || null;
+    setMainActorId(topMember?.id || fallbackMemberId);
+  }, [selectedAccount, teamByAccount, userActivityCounts]);
 
   const filteredAccounts = useMemo(() => {
     let result = accounts;
@@ -1165,8 +1148,8 @@ export default function App() {
 
   const teamRoster = useMemo(() => {
     if (!selectedAccount) return [];
-    return getClientTeamRoster(selectedAccount.account_id);
-  }, [selectedAccount]);
+    return teamByAccount[selectedAccount.id] || [];
+  }, [selectedAccount, teamByAccount]);
 
   const teamLookup = useMemo(() => {
     return new Map(teamRoster.map(member => [member.id, member]));
@@ -1709,9 +1692,14 @@ export default function App() {
                     </div>
                   );
                 })}
-                {teamRoster.length === 0 && (
+                {teamLoading && teamRoster.length === 0 && (
                   <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
-                    <p className="text-small">No hardcoded team roster found for this client.</p>
+                    <p className="text-small">Loading team roster from Facebook...</p>
+                  </div>
+                )}
+                {!teamLoading && teamRoster.length === 0 && (
+                  <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
+                    <p className="text-small">No team members were returned for this account.</p>
                   </div>
                 )}
               </div>
