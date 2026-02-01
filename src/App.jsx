@@ -808,6 +808,7 @@ export default function App() {
   const [globalLoading, setGlobalLoading] = useState({ active: false, status: '', progress: 0, canSkip: false });
   const [backgroundScan, setBackgroundScan] = useState({ active: false, progress: 0, status: '' });
   const [authError, setAuthError] = useState(null);
+  const [isConnecting, setIsConnecting] = useState(false);
   const [scanNotification, setScanNotification] = useState(null);
   
   const [accounts, setAccounts] = useState([]);
@@ -994,6 +995,7 @@ export default function App() {
   const handleConnect = async (e) => {
     e.preventDefault();
     setAuthError(null);
+    setIsConnecting(true);
 
     try {
       const response = await fetch(`${BASE_URL}/me/adaccounts?fields=account_id,name,account_status,currency,amount_spent,balance&limit=200&access_token=${session.token}`);
@@ -1016,6 +1018,8 @@ export default function App() {
 
     } catch (err) {
       setAuthError(err.message || "Connection failed. Please check your Token.");
+    } finally {
+      setIsConnecting(false);
     }
   };
 
@@ -1225,8 +1229,15 @@ export default function App() {
                   </div>
                 </div>
 
-                <button type="submit" className="btn-primary" disabled={globalLoading.active}>
-                  Initialize System
+                <button type="submit" className="btn-primary" disabled={isConnecting} aria-busy={isConnecting}>
+                  {isConnecting ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <Loader2 size={18} className="animate-spin-always" />
+                      Initializing...
+                    </span>
+                  ) : (
+                    'Initialize System'
+                  )}
                 </button>
               </form>
           </div>
