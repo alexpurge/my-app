@@ -820,6 +820,18 @@ const CREATIVE_SUPPORTING_KEYS = [
   'id'
 ];
 
+const CREATIVE_EVENT_HINTS = [
+  'creative',
+  'image',
+  'video',
+  'carousel',
+  'collection',
+  'asset',
+  'catalog',
+  'template',
+  'dynamic'
+];
+
 const extractCreativePayload = (extraData) => {
   if (!extraData) return null;
   if (typeof extraData === 'string') {
@@ -837,6 +849,16 @@ const hasCreativeKey = (payload, keys) => {
     ? payload.toLowerCase()
     : JSON.stringify(payload).toLowerCase();
   return keys.some(key => serialized.includes(key));
+};
+
+const isCreativeChangeLog = (log) => {
+  const payload = extractCreativePayload(log.extra_data);
+  const metadata = `${log.event_type || ''} ${log.translated_event_type || ''} ${log.object_type || ''} ${log.object_name || ''}`.toLowerCase();
+  const hasEventHint = CREATIVE_EVENT_HINTS.some(key => metadata.includes(key));
+
+  if (!payload) return hasEventHint;
+  if (hasCreativeKey(payload, CREATIVE_HIGH_SIGNAL_KEYS)) return true;
+  return hasEventHint && hasCreativeKey(payload, CREATIVE_SUPPORTING_KEYS);
 };
 
 const isSubstantiveChange = (log) => {
@@ -884,7 +906,6 @@ export default function App() {
 
   // Scanning & Filter State
   const [scanResults, setScanResults] = useState([]); 
-  const [dormancyDays, setDormancyDays] = useState(7); 
   const [showAtRiskFilter, setShowAtRiskFilter] = useState(false);
   const [accountStatusFilter, setAccountStatusFilter] = useState('Active'); 
 
@@ -968,12 +989,19 @@ export default function App() {
     setBackgroundScan({ active: true, progress: 0, status: 'Initializing...' });
 
     const results = [];
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - dormancyDays);
     const RISK_CPR_THRESHOLD = 60.00;
+    const creativeLookbackDays = 30;
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - creativeLookbackDays);
+    const creativeSince = Math.floor(cutoffDate.getTime() / 1000);
     
     // FIXED RANGE FOR SCAN: LAST 30 DAYS (No Date Picker Dependency)
     const insightsParams = { date_preset: 'last_30d', fields: 'spend,actions,action_values' };
+    const creativeHistoryParams = {
+      fields: 'event_time,event_type,translated_event_type,object_type,object_name,object_id,extra_data',
+      limit: 500,
+      since: creativeSince
+    };
 
     for (let i = 0; i < accountList.length; i++) {
       const acc = accountList[i];
@@ -984,17 +1012,25 @@ export default function App() {
 
       try {
         const [activitiesRes, insightsRes] = await Promise.allSettled([
-          fetch(`${BASE_URL}/act_${acc.account_id}/activities?fields=event_time,event_type,actor_name&limit=10&access_token=${session.token}`).then(r => r.json()),
+          fetchChangeHistory(`act_${acc.account_id}`, creativeHistoryParams),
           callGraphAPI(`/act_${acc.account_id}/insights`, insightsParams)
         ]);
 
         let isDormant = false;
-        let lastChangeDateStr = 'No recent history';
+        let lastChangeDateStr = `No creative changes in last ${creativeLookbackDays} days`;
         
         if (activitiesRes.status === 'fulfilled') {
-          const activities = activitiesRes.value.data || [];
-          const lastSubstantive = activities.find(log => isSubstantiveChange(log));
-          const lastChangeDate = lastSubstantive ? new Date(lastSubstantive.event_time) : null;
+          const activities = activitiesRes.value || [];
+          let latestCreativeLog = null;
+
+          activities.forEach(log => {
+            if (!isCreativeChangeLog(log) || !log.event_time) return;
+            if (!latestCreativeLog || new Date(log.event_time) > new Date(latestCreativeLog.event_time)) {
+              latestCreativeLog = log;
+            }
+          });
+
+          const lastChangeDate = latestCreativeLog ? new Date(latestCreativeLog.event_time) : null;
           if (lastChangeDate) lastChangeDateStr = lastChangeDate.toLocaleDateString();
           if (!lastChangeDate || lastChangeDate < cutoffDate) isDormant = true;
         }
