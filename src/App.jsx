@@ -1142,7 +1142,7 @@ export default function App() {
 
     const results = [];
     const RISK_CPR_THRESHOLD = 60.00;
-    const creativeLookbackDays = 30;
+    const creativeLookbackDays = 14;
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - creativeLookbackDays);
     const creativeSince = Math.floor(cutoffDate.getTime() / 1000);
