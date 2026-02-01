@@ -1096,7 +1096,7 @@ export default function App() {
 
         <div style={{ width: '100%', maxWidth: '480px', padding: '2rem' }}>
           <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-            <div style={{ width: '64px', height: '64px', background: '#ff5d00', borderRadius: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 15px -3px rgba(255, 93, 0, 0.4)' }}>
+            <div style={{ width: '64px', height: '64px', background: '#33333333', borderRadius: '16px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', boxShadow: '0 10px 15px -3px rgba(255, 93, 0, 0.4)' }}>
               <img src={LOGO_URL} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: '16px' }} />
             </div>
             <h1 style={{ fontSize: '2.5rem' }}>Purge Digital</h1>
