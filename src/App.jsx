@@ -23,15 +23,15 @@ const LOGO_URL = 'https://i.imgur.com/QjjDjuU.png';
 const GRAPH_API_VERSION = 'v19.0';
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 
-const normalizeTeamMember = (member, index) => {
-  const roleLabel = member?.role ? [member.role] : ['Authorized User'];
+const normalizeHistoryTeamMember = (log, index) => {
+  const name = log?.actor_name || 'Unknown User';
   return {
-    id: member?.id || `member-${index}`,
-    name: member?.name || 'Unknown User',
-    email: member?.email || 'Email not available',
-    role: member?.role || 'Assigned User',
-    accessLabels: roleLabel,
-    activityKey: member?.name || member?.email || ''
+    id: log?.actor_id || `history-${index}`,
+    name,
+    email: 'Email not available',
+    role: 'Account Access',
+    accessLabels: ['Change History'],
+    activityKey: name
   };
 };
 
@@ -852,11 +852,24 @@ export default function App() {
     setTeamLoading(true);
 
     try {
-      const response = await callGraphAPI(`/${accountId}/users`, {
-        fields: 'id,name,email,role',
-        limit: 200
+      const past = new Date();
+      past.setFullYear(past.getFullYear() - 20);
+      const activitiesSince = Math.floor(past.getTime() / 1000);
+      const historyParams = {
+        fields: 'actor_name,actor_id',
+        since: activitiesSince,
+        limit: 500
+      };
+      const activityLog = await fetchChangeHistory(accountId, historyParams);
+      const uniqueMembers = new Map();
+      activityLog.forEach((log, index) => {
+        const member = normalizeHistoryTeamMember(log, index);
+        const key = member.id || normalizeActorKey(member.activityKey);
+        if (!uniqueMembers.has(key)) {
+          uniqueMembers.set(key, member);
+        }
       });
-      const members = (response?.data || []).map((member, index) => normalizeTeamMember(member, index));
+      const members = Array.from(uniqueMembers.values());
       setTeamByAccount(prev => ({ ...prev, [accountId]: members }));
       return members;
     } catch (err) {
@@ -866,7 +879,7 @@ export default function App() {
     } finally {
       setTeamLoading(false);
     }
-  }, [callGraphAPI]);
+  }, [fetchChangeHistory]);
 
   // --- PORTFOLIO RISK SCAN LOGIC (ONE-TIME, BACKGROUND CAPABLE) ---
   const performRiskScan = async (accountList) => {
@@ -1694,12 +1707,12 @@ export default function App() {
                 })}
                 {teamLoading && teamRoster.length === 0 && (
                   <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
-                    <p className="text-small">Loading team roster from Facebook...</p>
+                    <p className="text-small">Loading team roster from change history...</p>
                   </div>
                 )}
                 {!teamLoading && teamRoster.length === 0 && (
                   <div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>
-                    <p className="text-small">No team members were returned for this account.</p>
+                    <p className="text-small">No team members were found in the change history for this account.</p>
                   </div>
                 )}
               </div>
