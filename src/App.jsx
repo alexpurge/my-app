@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { 
   LayoutDashboard, Users, History, PlusCircle, Calendar, Search, LogOut, 
   ShieldAlert, TrendingUp, Activity, ChevronRight, Filter, CheckCircle2, 
@@ -434,6 +434,143 @@ const STYLES = `
   .btn-outline:hover { border-color: #fff; color: #fff; }
   .btn-outline.active { background: rgba(255, 93, 0, 0.1); border-color: var(--accent-primary); color: var(--accent-primary); }
 
+  /* RISK FILTER DROPDOWN */
+  .risk-filter {
+    position: relative;
+  }
+  .risk-filter-trigger {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    padding: 0.5rem 0.9rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  .risk-filter-trigger:hover {
+    border-color: rgba(255, 255, 255, 0.5);
+    color: #fff;
+  }
+  .risk-filter-trigger.active {
+    border-color: rgba(255, 93, 0, 0.6);
+    box-shadow: 0 0 0 1px rgba(255, 93, 0, 0.2), 0 8px 20px rgba(255, 93, 0, 0.18);
+    color: #fff;
+  }
+  .risk-filter-pill {
+    background: rgba(255, 93, 0, 0.15);
+    border: 1px solid rgba(255, 93, 0, 0.3);
+    color: var(--accent-primary);
+    padding: 0.1rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    font-weight: 800;
+  }
+  .risk-filter-menu {
+    position: absolute;
+    top: calc(100% + 0.75rem);
+    right: 0;
+    min-width: 220px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 1rem;
+    padding: 1rem;
+    box-shadow: 0 20px 40px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(18px);
+    z-index: 50;
+  }
+  .risk-filter-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+    font-weight: 700;
+  }
+  .risk-filter-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.75rem;
+    border: 1px solid transparent;
+    background: rgba(2, 6, 23, 0.6);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: #e2e8f0;
+  }
+  .risk-filter-option:hover {
+    border-color: rgba(255, 255, 255, 0.1);
+  }
+  .risk-filter-option.selected {
+    border-color: rgba(255, 93, 0, 0.5);
+    background: rgba(255, 93, 0, 0.08);
+    color: #fff;
+  }
+  .risk-filter-option input {
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: rgba(0, 0, 0, 0.4);
+    position: relative;
+    cursor: pointer;
+  }
+  .risk-filter-option input:checked {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 12px rgba(255, 93, 0, 0.5);
+  }
+  .risk-filter-option input:checked::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 5px;
+    width: 5px;
+    height: 9px;
+    border: 2px solid #fff;
+    border-top: 0;
+    border-left: 0;
+    transform: rotate(45deg);
+  }
+  .risk-filter-actions {
+    margin-top: 0.9rem;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .risk-filter-apply {
+    background: var(--accent-primary);
+    border: none;
+    color: #fff;
+    padding: 0.55rem 1rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+  }
+  .risk-filter-apply:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    box-shadow: none;
+    transform: none;
+  }
+  .risk-filter-apply:not(:disabled):hover {
+    transform: translateY(-1px);
+    box-shadow: 0 12px 20px rgba(255, 93, 0, 0.3);
+  }
 
   /* DATE PICKER & MODAL */
   .date-picker { display: flex; gap: 0.5rem; flex-wrap: wrap; background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 0.75rem; border: 1px solid var(--border-color); }
@@ -907,7 +1044,22 @@ export default function App() {
   // Scanning & Filter State
   const [scanResults, setScanResults] = useState([]); 
   const [showAtRiskFilter, setShowAtRiskFilter] = useState(false);
+  const [riskFilterOpen, setRiskFilterOpen] = useState(false);
+  const [riskFilterDraft, setRiskFilterDraft] = useState({ cpa: true, creative: true });
+  const [riskFilterApplied, setRiskFilterApplied] = useState({ cpa: true, creative: true });
   const [accountStatusFilter, setAccountStatusFilter] = useState('Active'); 
+  const riskFilterRef = useRef(null);
+
+  useEffect(() => {
+    if (!riskFilterOpen) return;
+    const handleOutsideClick = (event) => {
+      if (riskFilterRef.current && !riskFilterRef.current.contains(event.target)) {
+        setRiskFilterOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleOutsideClick);
+    return () => window.removeEventListener('mousedown', handleOutsideClick);
+  }, [riskFilterOpen]);
 
   // --- API CALLER ---
   const callGraphAPI = useCallback(async (endpoint, params = {}) => {
@@ -1260,6 +1412,15 @@ export default function App() {
     setMainActorId(topMember?.id || fallbackMemberId);
   }, [selectedAccount, teamByAccount, userActivityCounts]);
 
+  const riskFilterLabel = useMemo(() => {
+    const selections = [];
+    if (riskFilterApplied.cpa) selections.push('CPA');
+    if (riskFilterApplied.creative) selections.push('Creative');
+    return selections.join(' + ');
+  }, [riskFilterApplied]);
+
+  const hasDraftRiskFilter = riskFilterDraft.cpa || riskFilterDraft.creative;
+
   const filteredAccounts = useMemo(() => {
     let result = accounts;
     if (accountStatusFilter === 'Active') {
@@ -1268,14 +1429,21 @@ export default function App() {
       result = result.filter(acc => acc.account_status !== 1);
     }
     if (showAtRiskFilter) {
-      const riskIds = new Set(scanResults.map(r => r.account_id));
+      const riskIds = new Set(
+        scanResults
+          .filter(risk => (
+            (riskFilterApplied.cpa && risk.isHighCostRisk) ||
+            (riskFilterApplied.creative && risk.isDormant)
+          ))
+          .map(r => r.account_id)
+      );
       result = result.filter(acc => riskIds.has(acc.account_id));
     }
     if (searchTerm) {
       result = result.filter(acc => acc.name.toLowerCase().includes(searchTerm.toLowerCase()));
     }
     return result;
-  }, [accounts, searchTerm, showAtRiskFilter, scanResults, accountStatusFilter]);
+  }, [accounts, searchTerm, showAtRiskFilter, scanResults, accountStatusFilter, riskFilterApplied]);
 
   const teamRoster = useMemo(() => {
     if (!selectedAccount) return [];
@@ -1423,15 +1591,56 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Existing Risk Filter */}
-              <button 
-                className={`btn-outline ${showAtRiskFilter ? 'active' : ''}`}
-                onClick={() => setShowAtRiskFilter(!showAtRiskFilter)}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
-              >
-                <AlertOctagon size={14} />
-                {showAtRiskFilter ? 'Showing Risk Only' : 'Risk Filter'}
-              </button>
+              {/* Risk Filter Dropdown */}
+              <div className="risk-filter" ref={riskFilterRef}>
+                <button
+                  type="button"
+                  className={`risk-filter-trigger ${showAtRiskFilter ? 'active' : ''}`}
+                  onClick={() => setRiskFilterOpen((prev) => !prev)}
+                  aria-expanded={riskFilterOpen}
+                >
+                  <AlertOctagon size={14} />
+                  Risk Filter
+                  {riskFilterLabel && (
+                    <span className="risk-filter-pill">{riskFilterLabel}</span>
+                  )}
+                </button>
+                {riskFilterOpen && (
+                  <div className="risk-filter-menu animate-fade-in">
+                    <div className="risk-filter-title">Show risk by</div>
+                    <label className={`risk-filter-option ${riskFilterDraft.cpa ? 'selected' : ''}`}>
+                      High CPA
+                      <input
+                        type="checkbox"
+                        checked={riskFilterDraft.cpa}
+                        onChange={() => setRiskFilterDraft(prev => ({ ...prev, cpa: !prev.cpa }))}
+                      />
+                    </label>
+                    <label className={`risk-filter-option ${riskFilterDraft.creative ? 'selected' : ''}`} style={{ marginTop: '0.6rem' }}>
+                      Creative
+                      <input
+                        type="checkbox"
+                        checked={riskFilterDraft.creative}
+                        onChange={() => setRiskFilterDraft(prev => ({ ...prev, creative: !prev.creative }))}
+                      />
+                    </label>
+                    <div className="risk-filter-actions">
+                      <button
+                        type="button"
+                        className="risk-filter-apply"
+                        disabled={!hasDraftRiskFilter}
+                        onClick={() => {
+                          setRiskFilterApplied(riskFilterDraft);
+                          setShowAtRiskFilter(hasDraftRiskFilter);
+                          setRiskFilterOpen(false);
+                        }}
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           )}
           <div style={{ width: '1px', height: '24px', background: '#334155' }}></div>
@@ -1453,23 +1662,13 @@ export default function App() {
                   </p>
                   {showAtRiskFilter && (
                     <div className="filter-chip" onClick={() => setShowAtRiskFilter(false)}>
-                      Risk Filter Active <X size={12}/>
+                      Risk Filter: {riskFilterLabel} <X size={12}/>
                     </div>
                   )}
                 </div>
               </div>
               
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem', width: '100%', maxWidth: '500px' }}>
-                {/* DATE RANGE PICKER (NOW GLOBAL ON HOME) */}
-                 <div className="date-picker">
-                  {[{ label: 'Today', days: 1 }, { label: '7 Days', days: 7 }, { label: '30 Days', days: 30 }, { label: 'All Time', days: 'all' }].map(d => (
-                    <button key={d.label} className={`date-btn ${dateRange.label === d.label ? 'active' : ''}`} onClick={() => setDateRange(d)}>{d.label}</button>
-                  ))}
-                  <button className={`date-btn ${dateRange.days === 'custom' ? 'active' : ''}`} onClick={() => setShowDatePicker(true)}>
-                    Custom
-                  </button>
-                </div>
-
                 <div style={{ position: 'relative', width: '100%' }}>
                   <Search size={18} className="input-icon" style={{ left: '1rem' }} />
                   <input type="text" className="glass-input" placeholder="Search clients..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} style={{ borderRadius: '99px', paddingLeft: '3rem' }} />
