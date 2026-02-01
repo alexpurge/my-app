@@ -34,7 +34,7 @@ const STYLES = `
     --text-secondary: #94a3b8;
     --accent-primary: #ff5d00;
     --accent-hover: #ff7b00;
-    --logo-bg: #ff8c42;
+    --logo-bg: #1a1a1a;
     --glass-border: 1px solid rgba(255, 255, 255, 0.1);
   }
 
