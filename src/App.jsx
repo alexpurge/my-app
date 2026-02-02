@@ -22,6 +22,13 @@ const APP_ID = '1870933960210610';
 const LOGO_URL = 'https://i.imgur.com/QjjDjuU.png'; 
 const GRAPH_API_VERSION = 'v19.0';
 const BASE_URL = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+const AIRCALL_BASE_URL = 'https://api.aircall.io/v1';
+const AIRCALL_API_ID = import.meta.env.VITE_AIRCALL_API_ID || '';
+const AIRCALL_API_TOKEN = import.meta.env.VITE_AIRCALL_API_TOKEN || '';
+
+const CLIENT_CONTACTS = {
+  // [account_id]: { mobileNumber: '+15555550123' }
+};
 
 const normalizeHistoryTeamMember = (log, index) => {
   const name = log?.actor_name || 'Unknown User';
@@ -219,6 +226,42 @@ const STYLES = `
   }
   .btn-primary:hover { background-color: var(--accent-hover); }
   .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  .btn-secondary {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: 999px;
+    padding: 0.6rem 1.2rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  .btn-secondary:hover { border-color: var(--accent-primary); color: #fff; }
+  .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
+
+  .aircall-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  .aircall-card {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 0.75rem;
+    padding: 1rem;
+    background: rgba(15, 23, 42, 0.4);
+  }
+
+  .aircall-meta {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 0.75rem;
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+  }
 
   /* --- LAYOUTS --- */
   .nav-bar {
@@ -928,6 +971,21 @@ const getActionValue = (insights, actionType, valueKey = 'value') => {
   return 0;
 };
 
+const formatCallDuration = (durationSeconds = 0) => {
+  const seconds = Number(durationSeconds) || 0;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes === 0) return `${remainingSeconds}s`;
+  return `${minutes}m ${remainingSeconds}s`;
+};
+
+const formatAircallDate = (value) => {
+  if (!value) return 'Date unavailable';
+  const date = typeof value === 'number' ? new Date(value * 1000) : new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return date.toLocaleString();
+};
+
 const CREATIVE_HIGH_SIGNAL_KEYS = [
   'link_data',
   'image_hash',
@@ -1040,6 +1098,12 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [teamByAccount, setTeamByAccount] = useState({});
   const [teamLoading, setTeamLoading] = useState(false);
+  const [aircallActivity, setAircallActivity] = useState([]);
+  const [aircallLoading, setAircallLoading] = useState(false);
+  const [aircallError, setAircallError] = useState('');
+  const [aircallPage, setAircallPage] = useState(1);
+  const [aircallHasMore, setAircallHasMore] = useState(true);
+  const [aircallHasRequested, setAircallHasRequested] = useState(false);
 
   // Scanning & Filter State
   const [scanResults, setScanResults] = useState([]); 
@@ -1074,6 +1138,68 @@ export default function App() {
       throw err;
     }
   }, [session.token]);
+
+  const getClientMobileNumber = useCallback((account) => {
+    if (!account) return '';
+    return (
+      account.mobileNumber ||
+      account.mobile_number ||
+      CLIENT_CONTACTS[account.account_id]?.mobileNumber ||
+      CLIENT_CONTACTS[account.id]?.mobileNumber ||
+      ''
+    );
+  }, []);
+
+  const callAircallAPI = useCallback(async (endpoint, params = {}) => {
+    if (!AIRCALL_API_ID || !AIRCALL_API_TOKEN) {
+      throw new Error('Aircall API credentials are missing.');
+    }
+    const queryParams = new URLSearchParams(params);
+    const authToken = btoa(`${AIRCALL_API_ID}:${AIRCALL_API_TOKEN}`);
+    const response = await fetch(`${AIRCALL_BASE_URL}${endpoint}?${queryParams.toString()}`, {
+      headers: {
+        Authorization: `Basic ${authToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    const data = await response.json();
+    if (!response.ok || data?.error) {
+      throw new Error(data?.error?.message || 'Failed to load Aircall activity.');
+    }
+    return data;
+  }, []);
+
+  const fetchAircallActivity = useCallback(async ({ page = 1, append = false } = {}) => {
+    if (!selectedAccount) return;
+    const mobileNumber = getClientMobileNumber(selectedAccount);
+    if (!mobileNumber) {
+      setAircallError('No mobile number is available for this client.');
+      setAircallHasRequested(true);
+      return;
+    }
+
+    setAircallLoading(true);
+    setAircallError('');
+    setAircallHasRequested(true);
+
+    try {
+      const response = await callAircallAPI('/calls', {
+        per_page: 5,
+        page,
+        phone_number: mobileNumber
+      });
+      const callData = response?.calls || response?.data || [];
+      const hasMore = Boolean(response?.meta?.next_page_link) || callData.length === 5;
+
+      setAircallActivity(prev => (append ? [...prev, ...callData] : callData));
+      setAircallPage(page);
+      setAircallHasMore(hasMore);
+    } catch (error) {
+      setAircallError(error.message || 'Unable to reach Aircall.');
+    } finally {
+      setAircallLoading(false);
+    }
+  }, [callAircallAPI, getClientMobileNumber, selectedAccount]);
 
   const fetchChangeHistory = useCallback(async (accountId, params = {}) => {
     const activityLog = [];
@@ -1242,7 +1368,13 @@ export default function App() {
       const data = await response.json();
       if (data.error) throw data.error;
       
-      const accountList = data.data || [];
+      const accountList = (data.data || []).map(account => {
+        const contact = CLIENT_CONTACTS[account.account_id] || {};
+        return {
+          ...account,
+          mobileNumber: account.mobileNumber || account.mobile_number || contact.mobileNumber || ''
+        };
+      });
       accountList.sort((a, b) => {
         if (a.account_status === 1 && b.account_status !== 1) return -1;
         if (a.account_status !== 1 && b.account_status === 1) return 1;
@@ -1394,6 +1526,15 @@ export default function App() {
       fetchAccountTeam(accountId);
     }
   }, [selectedAccount, teamByAccount, fetchAccountTeam]);
+
+  useEffect(() => {
+    if (!selectedAccount) return;
+    setAircallActivity([]);
+    setAircallError('');
+    setAircallPage(1);
+    setAircallHasMore(true);
+    setAircallHasRequested(false);
+  }, [selectedAccount]);
 
   useEffect(() => {
     if (!selectedAccount) return;
@@ -1769,12 +1910,13 @@ export default function App() {
             )}
 
             <div className="tab-group">
-              {['overview', 'team', 'logs'].map(tab => (
+              {['overview', 'team', 'logs', 'recent'].map(tab => (
                 <button key={tab} className={`tab-btn ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
                   {tab === 'overview' && <TrendingUp size={16} />}
                   {tab === 'logs' && <History size={16} />}
                   {tab === 'team' && <Users size={16} />}
-                  {tab === 'logs' ? 'CHANGE HISTORY' : tab.toUpperCase()}
+                  {tab === 'recent' && <Activity size={16} />}
+                  {tab === 'logs' ? 'CHANGE HISTORY' : tab === 'recent' ? 'RECENT ACTIVITY' : tab.toUpperCase()}
                 </button>
               ))}
             </div>
@@ -1990,6 +2132,98 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {/* TAB: RECENT ACTIVITY (AIRCALL) */}
+            {activeTab === 'recent' && (
+              <div className="glass-panel" style={{ padding: '1.5rem', minHeight: '40vh' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                  <div>
+                    <h3>Recent Activity</h3>
+                    <p className="text-small" style={{ marginTop: '0.35rem' }}>
+                      Linked mobile: <span style={{ color: '#fff' }}>{getClientMobileNumber(selectedAccount) || 'No number on file'}</span>
+                    </p>
+                    {aircallActivity.length > 0 && (
+                      <p className="text-small" style={{ marginTop: '0.35rem', textTransform: 'none' }}>
+                        Showing {aircallActivity.length} call{aircallActivity.length === 1 ? '' : 's'}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => fetchAircallActivity({ page: 1, append: false })}
+                    disabled={aircallLoading}
+                  >
+                    {aircallLoading ? 'Loading...' : 'Fetch Recent Activity'}
+                  </button>
+                </div>
+
+                {aircallError && (
+                  <div style={{ marginTop: '1rem', padding: '0.75rem 1rem', borderRadius: '0.75rem', background: 'rgba(248, 113, 113, 0.1)', border: '1px solid rgba(248, 113, 113, 0.3)', color: '#f87171', fontSize: '0.85rem' }}>
+                    {aircallError}
+                  </div>
+                )}
+
+                {aircallActivity.length > 0 && (
+                  <div className="aircall-list">
+                    {aircallActivity.map(call => (
+                      <div key={call.id || `${call.started_at}-${call.to}-${call.from}`} className="aircall-card">
+                        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem' }}>
+                          <div style={{ fontWeight: 700, color: '#fff' }}>
+                            {call.direction ? call.direction.toUpperCase() : 'CALL'}
+                          </div>
+                          <div className="text-small" style={{ color: '#cbd5f5', textTransform: 'none' }}>
+                            {formatAircallDate(call.started_at)}
+                          </div>
+                        </div>
+                        <div className="aircall-meta">
+                          <div>
+                            <div className="text-small" style={{ fontSize: '0.65rem' }}>Duration</div>
+                            <div style={{ color: '#fff' }}>{formatCallDuration(call.duration)}</div>
+                          </div>
+                          <div>
+                            <div className="text-small" style={{ fontSize: '0.65rem' }}>Caller</div>
+                            <div style={{ color: '#fff' }}>{call.user?.name || call.user_name || 'Unknown'}</div>
+                          </div>
+                          <div>
+                            <div className="text-small" style={{ fontSize: '0.65rem' }}>From</div>
+                            <div style={{ color: '#fff' }}>{call.from || call.raw_digits || 'Unknown'}</div>
+                          </div>
+                          <div>
+                            <div className="text-small" style={{ fontSize: '0.65rem' }}>To</div>
+                            <div style={{ color: '#fff' }}>{call.to || 'Unknown'}</div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {aircallHasRequested && !aircallLoading && aircallActivity.length === 0 && !aircallError && (
+                  <div style={{ marginTop: '2rem', textAlign: 'center', color: '#94a3b8' }}>
+                    No interactions are available for this number.
+                  </div>
+                )}
+
+                {aircallActivity.length > 0 && (
+                  <div style={{ marginTop: '1.5rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!aircallHasMore || aircallLoading}
+                      onClick={() => fetchAircallActivity({ page: aircallPage + 1, append: true })}
+                    >
+                      {aircallLoading ? 'Loading...' : 'Load more'}
+                    </button>
+                    {!aircallHasMore && (
+                      <div className="text-small" style={{ textAlign: 'center', color: '#94a3b8', textTransform: 'none' }}>
+                        No further interactions are available.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
