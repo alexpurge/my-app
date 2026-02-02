@@ -441,6 +441,26 @@ const STYLES = `
   .filter-chip:hover {
     background: rgba(255, 93, 0, 0.2);
   }
+
+  .risk-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.6rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    border: 1px solid rgba(255, 93, 0, 0.35);
+    background: rgba(255, 93, 0, 0.12);
+    color: #ff8c42;
+  }
+  .risk-tag.at-risk {
+    border-color: rgba(248, 113, 113, 0.4);
+    background: rgba(248, 113, 113, 0.15);
+    color: #f87171;
+  }
   
   .btn-outline {
     background: transparent;
@@ -994,6 +1014,17 @@ const CREATIVE_SUPPORTING_KEYS = [
   'id'
 ];
 
+const HIGH_COST_THRESHOLD = 60;
+const CREATIVE_LOOKBACK_DAYS = 14;
+const HIGH_COST_ACTION_MATCHERS = [
+  'lead',
+  'purchase',
+  'acquisition',
+  'offsite_conversion.purchase',
+  'omni_purchase',
+  'website_purchase'
+];
+
 const CREATIVE_EVENT_HINTS = [
   'creative',
   'image',
@@ -1047,6 +1078,32 @@ const isSubstantiveChange = (log) => {
   return hasCreativeHint && hasCreativeKey(payload, CREATIVE_SUPPORTING_KEYS);
 };
 
+const extractCostSignals = (costData) => {
+  if (!Array.isArray(costData)) {
+    return { cpl: null, cpa: null, hasHighCost: false };
+  }
+
+  let cpl = null;
+  let cpa = null;
+
+  costData.forEach((item) => {
+    const actionType = String(item?.action_type || '').toLowerCase();
+    const value = Number(item?.value);
+    if (!Number.isFinite(value)) return;
+
+    if (HIGH_COST_ACTION_MATCHERS.some(match => actionType.includes(match))) {
+      if (actionType.includes('lead')) {
+        cpl = cpl === null ? value : Math.max(cpl, value);
+      } else {
+        cpa = cpa === null ? value : Math.max(cpa, value);
+      }
+    }
+  });
+
+  const hasHighCost = [cpl, cpa].some(cost => cost !== null && cost > HIGH_COST_THRESHOLD);
+  return { cpl, cpa, hasHighCost };
+};
+
 // --- 3. MAIN COMPONENT ---
 
 export default function App() {
@@ -1084,6 +1141,11 @@ export default function App() {
   const [aircallHasRequested, setAircallHasRequested] = useState(false);
 
   const [accountStatusFilter, setAccountStatusFilter] = useState('Active'); 
+  const [riskResults, setRiskResults] = useState({});
+  const [riskScan, setRiskScan] = useState({ active: false, completed: 0, total: 0, lastRun: null });
+  const [riskFilter, setRiskFilter] = useState({ highCost: false, creativeChange: false });
+  const [riskFilterDraft, setRiskFilterDraft] = useState({ highCost: false, creativeChange: false });
+  const [riskFilterOpen, setRiskFilterOpen] = useState(false);
 
   // --- API CALLER ---
   const callGraphAPI = useCallback(async (endpoint, params = {}) => {
@@ -1298,6 +1360,83 @@ export default function App() {
     // backgroundScan state remains active and updated by performRiskScan loop
   };
 
+  const performRiskScan = useCallback(async () => {
+    if (!accounts.length || riskScan.active) return;
+
+    const total = accounts.length;
+    const sinceDate = new Date();
+    sinceDate.setDate(sinceDate.getDate() - CREATIVE_LOOKBACK_DAYS);
+    const sinceTimestamp = Math.floor(sinceDate.getTime() / 1000);
+
+    setRiskScan({ active: true, completed: 0, total, lastRun: null });
+    setGlobalLoading({
+      active: true,
+      status: 'Scanning change history & CPL/CPA signals...',
+      progress: 0,
+      canSkip: true
+    });
+
+    const scanResults = {};
+    const insightsParams = getRangeParams(dateRange, customDates);
+    insightsParams.fields = 'cost_per_action_type';
+    insightsParams.level = 'account';
+
+    for (let index = 0; index < accounts.length; index += 1) {
+      const account = accounts[index];
+      const accountId = `act_${account.account_id}`;
+      try {
+        const [insightsResult, historyResult] = await Promise.allSettled([
+          callGraphAPI(`/${accountId}/insights`, insightsParams),
+          fetchChangeHistory(accountId, {
+            fields: 'event_time,event_type,translated_event_type,object_type,object_name,extra_data',
+            since: sinceTimestamp,
+            limit: 500
+          })
+        ]);
+
+        const insightsData = insightsResult.status === 'fulfilled' ? insightsResult.value.data?.[0] : null;
+        const costSignals = extractCostSignals(insightsData?.cost_per_action_type);
+
+        const historyLogs = historyResult.status === 'fulfilled' ? historyResult.value : [];
+        const recentCreativeChange = historyLogs.find(log => {
+          if (!log?.event_time) return false;
+          if (new Date(log.event_time) < sinceDate) return false;
+          return isCreativeChangeLog(log);
+        });
+
+        scanResults[account.account_id] = {
+          cpl: costSignals.cpl,
+          cpa: costSignals.cpa,
+          highCost: costSignals.hasHighCost,
+          recentCreativeChange: Boolean(recentCreativeChange),
+          lastCreativeChange: recentCreativeChange?.event_time || null
+        };
+      } catch (error) {
+        scanResults[account.account_id] = {
+          cpl: null,
+          cpa: null,
+          highCost: false,
+          recentCreativeChange: false,
+          lastCreativeChange: null,
+          error: error?.message || 'Scan failed'
+        };
+      } finally {
+        const completed = index + 1;
+        const progress = Math.round((completed / total) * 100);
+        setRiskScan(prev => ({ ...prev, completed }));
+        setGlobalLoading(prev => (prev.active ? {
+          ...prev,
+          status: `Scanning ${account.name} (${completed}/${total})`,
+          progress
+        } : prev));
+      }
+    }
+
+    setRiskResults(scanResults);
+    setRiskScan({ active: false, completed: total, total, lastRun: new Date() });
+    setGlobalLoading({ active: false, status: '', progress: 0, canSkip: false });
+  }, [accounts, callGraphAPI, customDates, dateRange, fetchChangeHistory, riskScan.active]);
+
   // --- DATA SYNC LOGIC (SINGLE ACCOUNT) ---
   const refreshAccountData = useCallback(async () => {
     if (!selectedAccount) return;
@@ -1466,8 +1605,33 @@ export default function App() {
     if (searchTerm) {
       result = result.filter(acc => acc.name.toLowerCase().includes(searchTerm.toLowerCase()));
     }
+    if (riskFilter.highCost || riskFilter.creativeChange) {
+      result = result.filter(acc => {
+        const riskData = riskResults[acc.account_id];
+        if (!riskData) return false;
+        const matchesHighCost = riskFilter.highCost ? riskData.highCost : true;
+        const matchesCreative = riskFilter.creativeChange ? riskData.recentCreativeChange : true;
+        return matchesHighCost && matchesCreative;
+      });
+    }
     return result;
-  }, [accounts, searchTerm, accountStatusFilter]);
+  }, [accounts, searchTerm, accountStatusFilter, riskFilter, riskResults]);
+
+  const riskCounts = useMemo(() => {
+    return accounts.reduce((accum, account) => {
+      const riskData = riskResults[account.account_id];
+      if (!riskData) return accum;
+      const isRisk = riskData.highCost;
+      const isAtRisk = riskData.recentCreativeChange;
+      if (isRisk) accum.highCost += 1;
+      if (isAtRisk) accum.creativeChange += 1;
+      if (isRisk || isAtRisk) accum.total += 1;
+      return accum;
+    }, { highCost: 0, creativeChange: 0, total: 0 });
+  }, [accounts, riskResults]);
+
+  const hasRiskData = Object.keys(riskResults).length > 0;
+  const isRiskFilterActive = riskFilter.highCost || riskFilter.creativeChange;
 
   const teamRoster = useMemo(() => {
     if (!selectedAccount) return [];
@@ -1620,10 +1784,93 @@ export default function App() {
                   <p className="text-secondary">
                     Showing <span className="text-accent">{filteredAccounts.length}</span> of {accounts.length} assets
                   </p>
+                  {isRiskFilterActive && (
+                    <button
+                      type="button"
+                      className="filter-chip"
+                      onClick={() => setRiskFilter({ highCost: false, creativeChange: false })}
+                    >
+                      <ShieldAlert size={12} />
+                      Risk Filter Active
+                    </button>
+                  )}
                 </div>
               </div>
               
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '1rem', width: '100%', maxWidth: '500px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={performRiskScan}
+                    disabled={riskScan.active || !accounts.length}
+                  >
+                    {riskScan.active ? 'Scanning...' : 'Run Risk Scan'}
+                  </button>
+
+                  <div className="risk-filter">
+                    <button
+                      type="button"
+                      className={`risk-filter-trigger ${riskFilterOpen ? 'active' : ''}`}
+                      onClick={() => {
+                        if (!hasRiskData) return;
+                        setRiskFilterDraft(riskFilter);
+                        setRiskFilterOpen(prev => !prev);
+                      }}
+                      disabled={!hasRiskData}
+                    >
+                      <ShieldAlert size={14} />
+                      Risk Filter
+                      {isRiskFilterActive && (
+                        <span className="risk-filter-pill">
+                          {filteredAccounts.length}
+                        </span>
+                      )}
+                    </button>
+
+                    {riskFilterOpen && (
+                      <div className="risk-filter-menu">
+                        <div className="risk-filter-title">Filter by trigger</div>
+                        <div
+                          className={`risk-filter-option ${riskFilterDraft.highCost ? 'selected' : ''}`}
+                          onClick={() => setRiskFilterDraft(prev => ({ ...prev, highCost: !prev.highCost }))}
+                        >
+                          <span>CPL/CPA over ${HIGH_COST_THRESHOLD}</span>
+                          <input type="checkbox" checked={riskFilterDraft.highCost} readOnly />
+                        </div>
+                        <div
+                          className={`risk-filter-option ${riskFilterDraft.creativeChange ? 'selected' : ''}`}
+                          onClick={() => setRiskFilterDraft(prev => ({ ...prev, creativeChange: !prev.creativeChange }))}
+                        >
+                          <span>Creative change &lt; {CREATIVE_LOOKBACK_DAYS} days</span>
+                          <input type="checkbox" checked={riskFilterDraft.creativeChange} readOnly />
+                        </div>
+                        <div className="risk-filter-actions">
+                          <button
+                            type="button"
+                            className="risk-filter-apply"
+                            onClick={() => {
+                              setRiskFilter(riskFilterDraft);
+                              setRiskFilterOpen(false);
+                            }}
+                            disabled={riskFilterDraft.highCost === riskFilter.highCost && riskFilterDraft.creativeChange === riskFilter.creativeChange}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {(hasRiskData || riskScan.active) && (
+                  <div className="text-small" style={{ color: '#94a3b8' }}>
+                    {riskScan.active
+                      ? `Scanning ${riskScan.completed}/${riskScan.total} clients...`
+                      : `Risk scan complete · ${riskCounts.total} flagged`}
+                  </div>
+                )}
+
                 <div style={{ position: 'relative', width: '100%' }}>
                   <Search size={18} className="input-icon" style={{ left: '1rem' }} />
                   <input type="text" className="glass-input" placeholder="Search clients..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} style={{ borderRadius: '99px', paddingLeft: '3rem' }} />
@@ -1634,6 +1881,7 @@ export default function App() {
 
             <div className="grid-portfolio">
               {filteredAccounts.map(acc => {
+                const riskData = riskResults[acc.account_id];
                 return (
                   <div key={acc.account_id} className="glass-panel card-content" onClick={() => setSelectedAccount({ ...acc, id: `act_${acc.account_id}` })}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
@@ -1647,6 +1895,23 @@ export default function App() {
                     </div>
                     <h3 style={{ fontSize: '1.1rem', marginBottom: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{acc.name}</h3>
                     <p className="text-small text-mono">ID: {acc.account_id}</p>
+
+                    {riskData && (riskData.highCost || riskData.recentCreativeChange) && (
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.75rem' }}>
+                        {riskData.highCost && (
+                          <span className="risk-tag">
+                            <BadgeDollarSign size={12} />
+                            High CPL/CPA
+                          </span>
+                        )}
+                        {riskData.recentCreativeChange && (
+                          <span className="risk-tag at-risk">
+                            <AlertTriangle size={12} />
+                            Creative change
+                          </span>
+                        )}
+                      </div>
+                    )}
                     
                     <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                       <div>
