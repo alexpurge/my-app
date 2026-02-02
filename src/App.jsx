@@ -374,6 +374,25 @@ const STYLES = `
     color: var(--text-primary);
   }
 
+  .btn-export {
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-radius: 0.5rem;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .btn-export:hover { border-color: var(--accent-primary); color: #fff; }
+  .btn-export:disabled { opacity: 0.6; cursor: not-allowed; }
+
   .tab-group { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border-color); margin-bottom: 2rem; overflow-x: auto; width: 100%; }
   .tab-btn {
     background: none;
@@ -1081,6 +1100,8 @@ export default function App() {
   const [authError, setAuthError] = useState(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [scanNotification, setScanNotification] = useState(null);
+  const [scanComplete, setScanComplete] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   
   const [accounts, setAccounts] = useState([]);
   const [selectedAccount, setSelectedAccount] = useState(null);
@@ -1266,6 +1287,7 @@ export default function App() {
   // --- PORTFOLIO RISK SCAN LOGIC (ONE-TIME, BACKGROUND CAPABLE) ---
   const performRiskScan = async (accountList) => {
     // Non-blocking scan state (no global overlay)
+    setScanComplete(false);
     setBackgroundScan({ active: true, progress: 0, status: 'Initializing...' });
 
     const results = [];
@@ -1351,6 +1373,7 @@ export default function App() {
 
     setScanResults(results);
     setBackgroundScan({ active: false, progress: 0, status: '' });
+    setScanComplete(true);
     const riskCount = results.length;
     setScanNotification({
       message: riskCount
@@ -1364,6 +1387,7 @@ export default function App() {
     e.preventDefault();
     setAuthError(null);
     setIsConnecting(true);
+    setScanComplete(false);
 
     try {
       const response = await fetch(`${BASE_URL}/me/adaccounts?fields=account_id,name,account_status,currency,amount_spent,balance&limit=200&access_token=${session.token}`);
@@ -1394,6 +1418,95 @@ export default function App() {
       setAuthError(err.message || "Connection failed. Please check your Token.");
     } finally {
       setIsConnecting(false);
+    }
+  };
+
+  const buildExportTeamRoster = (activityLog) => {
+    const uniqueMembers = new Map();
+    (activityLog || []).forEach((log, index) => {
+      const member = normalizeHistoryTeamMember(log, index);
+      const key = member.id || normalizeActorKey(member.activityKey || member.name);
+      if (!uniqueMembers.has(key)) uniqueMembers.set(key, member);
+    });
+    return Array.from(uniqueMembers.values());
+  };
+
+  const handleExportAll = async () => {
+    if (!accounts.length || isExporting || !scanComplete) return;
+    setIsExporting(true);
+    setGlobalLoading({ active: true, status: 'Preparing export...', progress: 0, canSkip: false });
+
+    try {
+      const exportRange = { label: 'All Time', days: 'all' };
+      const insightsParams = getRangeParams(exportRange, customDates);
+      insightsParams.fields = 'spend,impressions,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,actions,action_values,cost_per_action_type,purchase_roas';
+      insightsParams.level = 'account';
+
+      const past = new Date();
+      past.setFullYear(past.getFullYear() - 20);
+      const activitiesSince = Math.floor(past.getTime() / 1000);
+      const logsParams = {
+        fields: 'event_time,event_type,translated_event_type,actor_name,actor_id,object_name,object_id,object_type,object_link,extra_data,application_name',
+        limit: 500,
+        since: activitiesSince
+      };
+
+      const exportPayload = {
+        exportedAt: new Date().toISOString(),
+        range: exportRange.label,
+        clients: []
+      };
+
+      for (let i = 0; i < accounts.length; i++) {
+        const acc = accounts[i];
+        const progress = Math.round(((i) / accounts.length) * 100);
+        setGlobalLoading({
+          active: true,
+          status: `Exporting ${acc.name}...`,
+          progress,
+          canSkip: false
+        });
+
+        const accountId = `act_${acc.account_id}`;
+        const [insightsRes, logsRes] = await Promise.allSettled([
+          callGraphAPI(`/${accountId}/insights`, insightsParams),
+          fetchChangeHistory(accountId, logsParams)
+        ]);
+
+        const insights = insightsRes.status === 'fulfilled'
+          ? insightsRes.value?.data || []
+          : { error: insightsRes.reason?.message || 'Insights export failed.' };
+        const activityLog = logsRes.status === 'fulfilled'
+          ? logsRes.value || []
+          : [];
+        const teamRoster = buildExportTeamRoster(activityLog);
+        const riskScan = scanResults.find(r => r.account_id === acc.account_id) || null;
+
+        exportPayload.clients.push({
+          account: acc,
+          riskScan,
+          insights,
+          activityLog,
+          teamRoster
+        });
+      }
+
+      setGlobalLoading({ active: true, status: 'Finalizing export...', progress: 100, canSkip: false });
+
+      const blob = new Blob([JSON.stringify(exportPayload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `purge-digital-export-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export failed:', error);
+    } finally {
+      setGlobalLoading({ active: false, status: '', progress: 0, canSkip: false });
+      setIsExporting(false);
     }
   };
 
@@ -1734,6 +1847,18 @@ export default function App() {
                 </button>
               </div>
 
+              {scanComplete && (
+                <button
+                  type="button"
+                  className="btn-export"
+                  onClick={handleExportAll}
+                  disabled={isExporting || backgroundScan.active || globalLoading.active}
+                >
+                  <Database size={14} />
+                  {isExporting ? 'Exporting...' : 'Export'}
+                </button>
+              )}
+
               {/* Risk Filter Dropdown */}
               <div className="risk-filter" ref={riskFilterRef}>
                 <button
@@ -1787,7 +1912,10 @@ export default function App() {
             </div>
           )}
           <div style={{ width: '1px', height: '24px', background: '#334155' }}></div>
-          <LogOut size={20} style={{ cursor: 'pointer', color: '#94a3b8' }} onClick={() => setSession({ loggedIn: false, token: '', appId: '' })} />
+          <LogOut size={20} style={{ cursor: 'pointer', color: '#94a3b8' }} onClick={() => {
+            setSession({ loggedIn: false, token: '', appId: '' });
+            setScanComplete(false);
+          }} />
         </div>
       </nav>
 
