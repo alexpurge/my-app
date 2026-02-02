@@ -1421,75 +1421,31 @@ export default function App() {
     }
   };
 
-  const buildExportTeamRoster = (activityLog) => {
-    const uniqueMembers = new Map();
-    (activityLog || []).forEach((log, index) => {
-      const member = normalizeHistoryTeamMember(log, index);
-      const key = member.id || normalizeActorKey(member.activityKey || member.name);
-      if (!uniqueMembers.has(key)) uniqueMembers.set(key, member);
-    });
-    return Array.from(uniqueMembers.values());
-  };
-
   const handleExportAll = async () => {
-    if (!accounts.length || isExporting || !scanComplete) return;
+    if (!accounts.length || isExporting) return;
     setIsExporting(true);
     setGlobalLoading({ active: true, status: 'Preparing export...', progress: 0, canSkip: false });
 
     try {
-      const exportRange = { label: 'All Time', days: 'all' };
-      const insightsParams = getRangeParams(exportRange, customDates);
-      insightsParams.fields = 'spend,impressions,cpm,inline_link_clicks,inline_link_click_ctr,cost_per_inline_link_click,actions,action_values,cost_per_action_type,purchase_roas';
-      insightsParams.level = 'account';
-
-      const past = new Date();
-      past.setFullYear(past.getFullYear() - 20);
-      const activitiesSince = Math.floor(past.getTime() / 1000);
-      const logsParams = {
-        fields: 'event_time,event_type,translated_event_type,actor_name,actor_id,object_name,object_id,object_type,object_link,extra_data,application_name',
-        limit: 500,
-        since: activitiesSince
-      };
-
       const exportPayload = {
         exportedAt: new Date().toISOString(),
-        range: exportRange.label,
-        clients: []
+        totalClients: accounts.length,
+        filters: {
+          accountStatus: accountStatusFilter,
+          riskFilter: riskFilterApplied,
+          searchTerm
+        },
+        dateRange,
+        customDates,
+        clients: accounts.map((acc) => {
+          const accountId = `act_${acc.account_id}`;
+          return {
+            account: acc,
+            riskScan: scanResults.find(r => r.account_id === acc.account_id) || null,
+            teamRoster: teamByAccount[accountId] || []
+          };
+        })
       };
-
-      for (let i = 0; i < accounts.length; i++) {
-        const acc = accounts[i];
-        const progress = Math.round(((i) / accounts.length) * 100);
-        setGlobalLoading({
-          active: true,
-          status: `Exporting ${acc.name}...`,
-          progress,
-          canSkip: false
-        });
-
-        const accountId = `act_${acc.account_id}`;
-        const [insightsRes, logsRes] = await Promise.allSettled([
-          callGraphAPI(`/${accountId}/insights`, insightsParams),
-          fetchChangeHistory(accountId, logsParams)
-        ]);
-
-        const insights = insightsRes.status === 'fulfilled'
-          ? insightsRes.value?.data || []
-          : { error: insightsRes.reason?.message || 'Insights export failed.' };
-        const activityLog = logsRes.status === 'fulfilled'
-          ? logsRes.value || []
-          : [];
-        const teamRoster = buildExportTeamRoster(activityLog);
-        const riskScan = scanResults.find(r => r.account_id === acc.account_id) || null;
-
-        exportPayload.clients.push({
-          account: acc,
-          riskScan,
-          insights,
-          activityLog,
-          teamRoster
-        });
-      }
 
       setGlobalLoading({ active: true, status: 'Finalizing export...', progress: 100, canSkip: false });
 
@@ -1847,17 +1803,15 @@ export default function App() {
                 </button>
               </div>
 
-              {scanComplete && (
-                <button
-                  type="button"
-                  className="btn-export"
-                  onClick={handleExportAll}
-                  disabled={isExporting || backgroundScan.active || globalLoading.active}
-                >
-                  <Database size={14} />
-                  {isExporting ? 'Exporting...' : 'Export'}
-                </button>
-              )}
+              <button
+                type="button"
+                className="btn-export"
+                onClick={handleExportAll}
+                disabled={isExporting || globalLoading.active}
+              >
+                <Database size={14} />
+                {isExporting ? 'Exporting...' : 'Export'}
+              </button>
 
               {/* Risk Filter Dropdown */}
               <div className="risk-filter" ref={riskFilterRef}>
