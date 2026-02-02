@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   LayoutDashboard, Users, History, PlusCircle, Calendar, Search, LogOut, 
-  ShieldAlert, TrendingUp, Activity, ChevronRight, Filter, CheckCircle2, 
+  ShieldAlert, TrendingUp, Activity, ChevronRight, CheckCircle2, 
   XCircle, Briefcase, RefreshCw, AlertTriangle, Menu, X, ArrowUpRight, 
-  Database, Lock, Key, Clock, AlertOctagon, Loader2, MousePointerClick,
+  Database, Lock, Key, Clock, Loader2, MousePointerClick,
   BadgeDollarSign, ShoppingBag, Percent, Star, ChevronLeft, Power, SkipForward,
   Minimize2, ArrowRight
 } from 'lucide-react';
@@ -112,48 +112,6 @@ const STYLES = `
     align-items: center;
     justify-content: center;
     color: white;
-  }
-
-  /* --- MINI LOADER (NAV BAR) --- */
-  .mini-loader-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.5rem 1rem;
-    background: rgba(15, 23, 42, 0.9);
-    border: 1px solid var(--border-color);
-    border-radius: 99px;
-    margin-right: 1rem;
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
-  }
-  .mini-progress-track {
-    width: 100px;
-    height: 4px;
-    background: rgba(255,255,255,0.1);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .mini-progress-fill {
-    height: 100%;
-    background: var(--accent-primary);
-    transition: width 0.3s ease;
-  }
-
-  /* --- SCAN NOTIFICATION --- */
-  .scan-toast {
-    position: fixed;
-    top: 1.5rem;
-    right: 1.5rem;
-    z-index: 9998;
-    background: rgba(15, 23, 42, 0.95);
-    border: 1px solid var(--border-color);
-    border-radius: 0.75rem;
-    padding: 0.75rem 1rem;
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.45);
-    max-width: 320px;
   }
 
   /* --- UTILITIES --- */
@@ -1096,11 +1054,8 @@ export default function App() {
   
   // Loading States
   const [globalLoading, setGlobalLoading] = useState({ active: false, status: '', progress: 0, canSkip: false });
-  const [backgroundScan, setBackgroundScan] = useState({ active: false, progress: 0, status: '' });
   const [authError, setAuthError] = useState(null);
   const [isConnecting, setIsConnecting] = useState(false);
-  const [scanNotification, setScanNotification] = useState(null);
-  const [scanComplete, setScanComplete] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   
   const [accounts, setAccounts] = useState([]);
@@ -1128,25 +1083,7 @@ export default function App() {
   const [aircallHasMore, setAircallHasMore] = useState(true);
   const [aircallHasRequested, setAircallHasRequested] = useState(false);
 
-  // Scanning & Filter State
-  const [scanResults, setScanResults] = useState([]); 
-  const [showAtRiskFilter, setShowAtRiskFilter] = useState(false);
-  const [riskFilterOpen, setRiskFilterOpen] = useState(false);
-  const [riskFilterDraft, setRiskFilterDraft] = useState({ cpa: true, creative: true });
-  const [riskFilterApplied, setRiskFilterApplied] = useState({ cpa: true, creative: true });
   const [accountStatusFilter, setAccountStatusFilter] = useState('Active'); 
-  const riskFilterRef = useRef(null);
-
-  useEffect(() => {
-    if (!riskFilterOpen) return;
-    const handleOutsideClick = (event) => {
-      if (riskFilterRef.current && !riskFilterRef.current.contains(event.target)) {
-        setRiskFilterOpen(false);
-      }
-    };
-    window.addEventListener('mousedown', handleOutsideClick);
-    return () => window.removeEventListener('mousedown', handleOutsideClick);
-  }, [riskFilterOpen]);
 
   // --- API CALLER ---
   const callGraphAPI = useCallback(async (endpoint, params = {}) => {
@@ -1278,116 +1215,11 @@ export default function App() {
     }
   }, [fetchChangeHistory]);
 
-  useEffect(() => {
-    if (!scanNotification) return;
-    const timeout = setTimeout(() => setScanNotification(null), 6000);
-    return () => clearTimeout(timeout);
-  }, [scanNotification]);
-
-  // --- PORTFOLIO RISK SCAN LOGIC (ONE-TIME, BACKGROUND CAPABLE) ---
-  const performRiskScan = async (accountList) => {
-    // Non-blocking scan state (no global overlay)
-    setScanComplete(false);
-    setBackgroundScan({ active: true, progress: 0, status: 'Initializing...' });
-
-    const results = [];
-    const RISK_CPR_THRESHOLD = 60.00;
-    const creativeLookbackDays = 14;
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - creativeLookbackDays);
-    const creativeSince = Math.floor(cutoffDate.getTime() / 1000);
-    
-    // FIXED RANGE FOR SCAN: LAST 30 DAYS (No Date Picker Dependency)
-    const insightsParams = { date_preset: 'last_30d', fields: 'spend,actions,action_values' };
-    const creativeHistoryParams = {
-      fields: 'event_time,event_type,translated_event_type,object_type,object_name,object_id,extra_data',
-      limit: 500,
-      since: creativeSince
-    };
-
-    for (let i = 0; i < accountList.length; i++) {
-      const acc = accountList[i];
-      const progress = Math.round(((i + 1) / accountList.length) * 100);
-      const statusText = `Scanning ${acc.name}...`;
-
-      setBackgroundScan({ active: true, progress, status: statusText });
-
-      try {
-        const [activitiesRes, insightsRes] = await Promise.allSettled([
-          fetchChangeHistory(`act_${acc.account_id}`, creativeHistoryParams),
-          callGraphAPI(`/act_${acc.account_id}/insights`, insightsParams)
-        ]);
-
-        let isDormant = false;
-        let lastChangeDateStr = `No creative changes in last ${creativeLookbackDays} days`;
-        
-        if (activitiesRes.status === 'fulfilled') {
-          const activities = activitiesRes.value || [];
-          let latestCreativeLog = null;
-
-          activities.forEach(log => {
-            if (!isCreativeChangeLog(log) || !log.event_time) return;
-            if (!latestCreativeLog || new Date(log.event_time) > new Date(latestCreativeLog.event_time)) {
-              latestCreativeLog = log;
-            }
-          });
-
-          const lastChangeDate = latestCreativeLog ? new Date(latestCreativeLog.event_time) : null;
-          if (lastChangeDate) lastChangeDateStr = lastChangeDate.toLocaleDateString();
-          if (!lastChangeDate || lastChangeDate < cutoffDate) isDormant = true;
-        }
-
-        let isHighCostRisk = false;
-        let calculatedCPA = 0;
-        let totalConversions = 0;
-        let spend = 0;
-
-        if (insightsRes.status === 'fulfilled' && insightsRes.value.data && insightsRes.value.data.length > 0) {
-          const ins = insightsRes.value.data[0];
-          spend = parseFloat(ins.spend || 0);
-          const leads = getActionValue(ins, 'lead', 'value') || 0;
-          const purchases = getActionValue(ins, 'purchase', 'value') || 0;
-          totalConversions = parseInt(leads) + parseInt(purchases);
-
-          if (totalConversions > 0) {
-            calculatedCPA = spend / totalConversions;
-            if (calculatedCPA > RISK_CPR_THRESHOLD) isHighCostRisk = true;
-          } else if (spend > RISK_CPR_THRESHOLD && totalConversions === 0) {
-            isHighCostRisk = true;
-          }
-        }
-
-        if (isDormant || isHighCostRisk) {
-          results.push({
-            account_id: acc.account_id,
-            isDormant,
-            isHighCostRisk,
-            cpa: calculatedCPA,
-            lastSubstantiveChange: lastChangeDateStr
-          });
-        }
-      } catch (err) {
-        console.warn(`Scan error for ${acc.account_id}`, err);
-      }
-    }
-
-    setScanResults(results);
-    setBackgroundScan({ active: false, progress: 0, status: '' });
-    setScanComplete(true);
-    const riskCount = results.length;
-    setScanNotification({
-      message: riskCount
-        ? `Portfolio scan complete. ${riskCount} account${riskCount === 1 ? '' : 's'} flagged.`
-        : 'Portfolio scan complete. No risks detected.',
-    });
-  };
-
   // --- LOGIN LOGIC ---
   const handleConnect = async (e) => {
     e.preventDefault();
     setAuthError(null);
     setIsConnecting(true);
-    setScanComplete(false);
 
     try {
       const response = await fetch(`${BASE_URL}/me/adaccounts?fields=account_id,name,account_status,currency,amount_spent,balance&limit=200&access_token=${session.token}`);
@@ -1408,10 +1240,6 @@ export default function App() {
       });
       
       setAccounts(accountList);
-      
-      // Perform Scan (Async, don't await blocking UI)
-      performRiskScan(accountList);
-      
       setSession(prev => ({ ...prev, loggedIn: true }));
 
     } catch (err) {
@@ -1432,7 +1260,6 @@ export default function App() {
         totalClients: accounts.length,
         filters: {
           accountStatus: accountStatusFilter,
-          riskFilter: riskFilterApplied,
           searchTerm
         },
         dateRange,
@@ -1441,7 +1268,6 @@ export default function App() {
           const accountId = `act_${acc.account_id}`;
           return {
             account: acc,
-            riskScan: scanResults.find(r => r.account_id === acc.account_id) || null,
             teamRoster: teamByAccount[accountId] || []
           };
         })
@@ -1608,6 +1434,12 @@ export default function App() {
   }, [selectedAccount]);
 
   useEffect(() => {
+    if (activeTab !== 'recent') return;
+    if (!selectedAccount) return;
+    fetchAircallActivity({ page: 1, append: false });
+  }, [activeTab, selectedAccount, fetchAircallActivity]);
+
+  useEffect(() => {
     if (!selectedAccount) return;
     const roster = teamByAccount[selectedAccount.id] || [];
     if (roster.length === 0) return;
@@ -1624,15 +1456,6 @@ export default function App() {
     setMainActorId(topMember?.id || fallbackMemberId);
   }, [selectedAccount, teamByAccount, userActivityCounts]);
 
-  const riskFilterLabel = useMemo(() => {
-    const selections = [];
-    if (riskFilterApplied.cpa) selections.push('CPA');
-    if (riskFilterApplied.creative) selections.push('Creative');
-    return selections.join(' + ');
-  }, [riskFilterApplied]);
-
-  const hasDraftRiskFilter = riskFilterDraft.cpa || riskFilterDraft.creative;
-
   const filteredAccounts = useMemo(() => {
     let result = accounts;
     if (accountStatusFilter === 'Active') {
@@ -1640,22 +1463,11 @@ export default function App() {
     } else if (accountStatusFilter === 'Inactive') {
       result = result.filter(acc => acc.account_status !== 1);
     }
-    if (showAtRiskFilter) {
-      const riskIds = new Set(
-        scanResults
-          .filter(risk => (
-            (riskFilterApplied.cpa && risk.isHighCostRisk) ||
-            (riskFilterApplied.creative && risk.isDormant)
-          ))
-          .map(r => r.account_id)
-      );
-      result = result.filter(acc => riskIds.has(acc.account_id));
-    }
     if (searchTerm) {
       result = result.filter(acc => acc.name.toLowerCase().includes(searchTerm.toLowerCase()));
     }
     return result;
-  }, [accounts, searchTerm, showAtRiskFilter, scanResults, accountStatusFilter, riskFilterApplied]);
+  }, [accounts, searchTerm, accountStatusFilter]);
 
   const teamRoster = useMemo(() => {
     if (!selectedAccount) return [];
@@ -1719,18 +1531,6 @@ export default function App() {
     <div className="app-wrapper">
       <style>{STYLES}</style>
 
-      {scanNotification && (
-        <div className="scan-toast animate-fade-in">
-          <CheckCircle2 size={18} color="#22c55e" />
-          <div>
-            <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>Scan Complete</div>
-            <div className="text-small" style={{ fontSize: '0.65rem', color: '#cbd5f5' }}>
-              {scanNotification.message}
-            </div>
-          </div>
-        </div>
-      )}
-      
       {globalLoading.active && (
         <GlobalLoader 
           status={globalLoading.status} 
@@ -1762,19 +1562,6 @@ export default function App() {
         </div>
         
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          {/* BACKGROUND SCAN MINI LOADER (Top Right) */}
-          {backgroundScan.active && !globalLoading.active && (
-            <div className="mini-loader-wrapper animate-fade-in">
-              <div style={{display:'flex', flexDirection:'column', gap:'2px'}}>
-                <span className="text-small" style={{fontSize:'0.6rem', color:'#fff'}}>Scanning...</span>
-                <div className="mini-progress-track">
-                  <div className="mini-progress-fill" style={{width: `${backgroundScan.progress}%`}}></div>
-                </div>
-              </div>
-              <RefreshCw className="animate-spin" size={14} color="#ff5d00" />
-            </div>
-          )}
-
           {selectedAccount ? (
             <button className="text-small" style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', display: 'flex', gap: '0.5rem' }} onClick={() => setSelectedAccount(null)}>
               <LayoutDashboard size={14} /> Back to Portfolio
@@ -1812,63 +1599,11 @@ export default function App() {
                 <Database size={14} />
                 {isExporting ? 'Exporting...' : 'Export'}
               </button>
-
-              {/* Risk Filter Dropdown */}
-              <div className="risk-filter" ref={riskFilterRef}>
-                <button
-                  type="button"
-                  className={`risk-filter-trigger ${showAtRiskFilter ? 'active' : ''}`}
-                  onClick={() => setRiskFilterOpen((prev) => !prev)}
-                  aria-expanded={riskFilterOpen}
-                >
-                  <AlertOctagon size={14} />
-                  Risk Filter
-                  {riskFilterLabel && (
-                    <span className="risk-filter-pill">{riskFilterLabel}</span>
-                  )}
-                </button>
-                {riskFilterOpen && (
-                  <div className="risk-filter-menu animate-fade-in">
-                    <div className="risk-filter-title">Show risk by</div>
-                    <label className={`risk-filter-option ${riskFilterDraft.cpa ? 'selected' : ''}`}>
-                      High CPA
-                      <input
-                        type="checkbox"
-                        checked={riskFilterDraft.cpa}
-                        onChange={() => setRiskFilterDraft(prev => ({ ...prev, cpa: !prev.cpa }))}
-                      />
-                    </label>
-                    <label className={`risk-filter-option ${riskFilterDraft.creative ? 'selected' : ''}`} style={{ marginTop: '0.6rem' }}>
-                      Creative
-                      <input
-                        type="checkbox"
-                        checked={riskFilterDraft.creative}
-                        onChange={() => setRiskFilterDraft(prev => ({ ...prev, creative: !prev.creative }))}
-                      />
-                    </label>
-                    <div className="risk-filter-actions">
-                      <button
-                        type="button"
-                        className="risk-filter-apply"
-                        disabled={!hasDraftRiskFilter}
-                        onClick={() => {
-                          setRiskFilterApplied(riskFilterDraft);
-                          setShowAtRiskFilter(hasDraftRiskFilter);
-                          setRiskFilterOpen(false);
-                        }}
-                      >
-                        Apply
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           )}
           <div style={{ width: '1px', height: '24px', background: '#334155' }}></div>
           <LogOut size={20} style={{ cursor: 'pointer', color: '#94a3b8' }} onClick={() => {
             setSession({ loggedIn: false, token: '', appId: '' });
-            setScanComplete(false);
           }} />
         </div>
       </nav>
@@ -1885,11 +1620,6 @@ export default function App() {
                   <p className="text-secondary">
                     Showing <span className="text-accent">{filteredAccounts.length}</span> of {accounts.length} assets
                   </p>
-                  {showAtRiskFilter && (
-                    <div className="filter-chip" onClick={() => setShowAtRiskFilter(false)}>
-                      Risk Filter: {riskFilterLabel} <X size={12}/>
-                    </div>
-                  )}
                 </div>
               </div>
               
@@ -1904,9 +1634,6 @@ export default function App() {
 
             <div className="grid-portfolio">
               {filteredAccounts.map(acc => {
-                const riskData = scanResults.find(r => r.account_id === acc.account_id);
-                const isRisk = !!riskData;
-
                 return (
                   <div key={acc.account_id} className="glass-panel card-content" onClick={() => setSelectedAccount({ ...acc, id: `act_${acc.account_id}` })}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
@@ -1920,25 +1647,6 @@ export default function App() {
                     </div>
                     <h3 style={{ fontSize: '1.1rem', marginBottom: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{acc.name}</h3>
                     <p className="text-small text-mono">ID: {acc.account_id}</p>
-                    
-                    {/* SHOW RISK STATUS IN CARD */}
-                    {isRisk ? (
-                      <div style={{marginTop:'1rem', padding:'0.5rem', background:'rgba(255, 93, 0, 0.1)', borderRadius:'0.5rem', display:'flex', flexDirection:'column', gap:'0.25rem', fontSize:'0.75rem', color:'#ff5d00', border: '1px solid rgba(255, 93, 0, 0.2)'}}>
-                        <div style={{display:'flex', alignItems:'center', gap:'0.5rem', fontWeight:'700'}}>
-                          <AlertOctagon size={12} /> AT RISK
-                        </div>
-                        {riskData.isHighCostRisk && (
-                          <span style={{opacity:0.8}}>High CPA: ${riskData.cpa.toFixed(2)}</span>
-                        )}
-                        {riskData.isDormant && (
-                          <span style={{opacity:0.8}}>Dormant: 7+ Days</span>
-                        )}
-                      </div>
-                    ) : (
-                      <div style={{marginTop:'1rem', padding:'0.5rem', background:'rgba(74, 222, 128, 0.1)', borderRadius:'0.5rem', display:'flex', alignItems:'center', gap:'0.5rem', fontSize:'0.75rem', color:'#4ade80', border: '1px solid rgba(74, 222, 128, 0.2)'}}>
-                        <CheckCircle2 size={12} /> Healthy
-                      </div>
-                    )}
                     
                     <div style={{ marginTop: 'auto', paddingTop: '1rem', borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
                       <div>
@@ -2240,7 +1948,7 @@ export default function App() {
                     onClick={() => fetchAircallActivity({ page: 1, append: false })}
                     disabled={aircallLoading}
                   >
-                    {aircallLoading ? 'Loading...' : 'Fetch Recent Activity'}
+                    {aircallLoading ? 'Loading...' : 'Refresh Recent Activity'}
                   </button>
                 </div>
 
